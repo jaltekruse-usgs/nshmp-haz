@@ -4,6 +4,15 @@ import static com.google.common.base.Preconditions.checkNotNull;
 import static gov.usgs.earthquake.nshmp.geo.BorderType.MERCATOR_LINEAR;
 
 import java.awt.Shape;
+import java.awt.geom.Area;
+import java.awt.geom.Path2D;
+import java.awt.geom.Rectangle2D;
+import java.util.List;
+
+import com.google.common.collect.Lists;
+import com.google.common.primitives.Doubles;
+
+import gov.usgs.earthquake.nshmp.data.Data;
 
 /**
  * Utility methods pertaining to geographic regions.
@@ -42,6 +51,9 @@ public class Regions {
     return r;
   }
 
+  // TODO: the linked image does not appear to be accurate, in that
+  // createGridded does not create a rectangular grid for all polygons
+  // (LocationList border)
   /**
    * <img style="padding: 30px 40px; float: right;" src=
    * "{@docRoot}/resources/gridded_regions_border.jpg"/>Creates a
@@ -308,4 +320,78 @@ public class Regions {
     return create("Global Region", locs, MERCATOR_LINEAR);
   }
 
+  /**
+   * Returns a flat-earth estimate of the area of this region in km<sup>2</sup>.
+   * Method uses the center of this {@code Region}'s bounding polygon as the
+   * origin of an orthogonal coordinate system. This method is not appropriate
+   * for use with very large {@code Region}s where the curvature of the earth is
+   * more significant.
+   *
+   * TODO should probably use centroid of polygon
+   *
+   * Assumes aupplied area has already been cleaned of strays etc...
+   *
+   * @return the area of this region in km<sup>2</sup>
+   */
+  static double computeArea(Region region) {
+    LocationList locs = region.border();
+    Area area = new Area(toPath(locs));
+    Rectangle2D rRect = area.getBounds2D();
+    Location origin = Location.create(rRect.getCenterY(), rRect.getCenterX());
+    // compute orthogonal coordinates in km
+    List<Double> xs = Lists.newArrayList();
+    List<Double> ys = Lists.newArrayList();
+    for (Location loc : locs) {
+      LocationVector v = LocationVector.create(origin, loc);
+      double az = v.azimuth();
+      double d = v.horizontal();
+      xs.add(Math.sin(az) * d);
+      ys.add(Math.cos(az) * d);
+    }
+    // repeat first point
+    xs.add(xs.get(0));
+    ys.add(ys.get(0));
+    return computeArea(Doubles.toArray(xs), Doubles.toArray(ys));
+  }
+
+  /*
+   * Computes the area of a simple polygon; no data validation is performed
+   * except ensuring that all coordinates are positive.
+   */
+  private static double computeArea(double[] xs, double[] ys) {
+    positivize(xs);
+    positivize(ys);
+    double area = 0;
+    for (int i = 0; i < xs.length - 1; i++) {
+      area += xs[i] * ys[i + 1] - xs[i + 1] * ys[i];
+    }
+    return Math.abs(area) / 2;
+  }
+
+  /* Ensures positivity of values by adding Math.abs(min) if min < 0. */
+  private static void positivize(double[] v) {
+    double min = Doubles.min(v);
+    if (min >= 0) return;
+    Data.add(Math.abs(min), v);
+  }
+
+  /* Returns a closed, straight-line {@link Path2D}. */
+  private static Path2D toPath(LocationList locs) {
+    Path2D path = new Path2D.Double(Path2D.WIND_EVEN_ODD, locs.size());
+    boolean starting = true;
+    for (Location loc : locs) {
+      double lat = loc.lat();
+      double lon = loc.lon();
+      // if just starting, then moveTo
+      if (starting) {
+        path.moveTo(lon, lat);
+        starting = false;
+        continue;
+      }
+      path.lineTo(lon, lat);
+    }
+    path.closePath();
+    return path;
+
+  }
 }
